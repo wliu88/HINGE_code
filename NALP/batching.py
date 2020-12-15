@@ -4,6 +4,7 @@ import random
 import math
 from itertools import repeat
 
+
 def replace_val(n_values, last_idx, role_val, arity, new_facts_indexes, new_facts_values, whole_train_facts, num_negative_samples):
     """
     Replace values randomly to get negative samples
@@ -11,6 +12,8 @@ def replace_val(n_values, last_idx, role_val, arity, new_facts_indexes, new_fact
     rmd_dict = role_val #role2values
 
     new_range = last_idx
+
+    # ToDo: creating negative fact one by one is not very efficient
     for cur_idx in range(new_range): #loop batch size times
         role_ind = (np.random.randint(np.iinfo(np.int32).max) % arity) * 2 #generate a number between (0 and arity-1) * 2. This is the column of a role, and we want to replace its value
         tmp_role = new_facts_indexes[last_idx + cur_idx, role_ind] #get the role. Row:last_idx+cur_idx, column:role_ind. In the first half of new_facts_indexes there are positive facts, and in the second half negative facts (that's why the row number is always last_idx (which is == batch size) + onther index)
@@ -21,6 +24,16 @@ def replace_val(n_values, last_idx, role_val, arity, new_facts_indexes, new_fact
         times = 1 #loop counter
         tmp_array = new_facts_indexes[last_idx + cur_idx] #get the whole fact
         tmp_array[role_ind+1] = rmd_dict[tmp_role][rdm_w] #replace the value
+
+        # Important: when generating negative examples, need to make sure the sampled fact is not in training set.
+        #            More importantly, need to make sure the sampled fact is not a training fact with different ordering
+        #            of role-value pairs.
+        #
+        #            e.g., [r1, v1, r2, v2] == [r2, v2, r1, v1]
+        #
+        #            The following line uses whole_train_facts, which contains training facts with all different
+        #            orderings
+
         while (tuple(tmp_array) in whole_train_facts): #if the new fact does not exist in the whole_train_facts (which contains also the permute facts)
             if (tmp_len == 1) or (times > 2*tmp_len) or (times > 100): #if one of this condition is satisfied, then retun a fact with a random value
                 tmp_array[role_ind+1] = np.random.randint(0, n_values)
@@ -30,6 +43,7 @@ def replace_val(n_values, last_idx, role_val, arity, new_facts_indexes, new_fact
             times = times + 1
         new_facts_indexes[last_idx + cur_idx, role_ind+1] = tmp_array[role_ind+1] #store the corrupted value in new_facts_indexes (row:last_idx+cur_idx, column:role_ind+1)
         new_facts_values[last_idx + cur_idx] = [-1] #set -1 because we have generated a false fact
+
 
 def replace_role(n_roles, last_idx, arity, new_facts_indexes, new_facts_values, whole_train_facts, new_negative_sampling_h_and_t, roleH2roleT, num_negative_samples):
     """
@@ -81,6 +95,14 @@ def Batch_Loader(train_i_indexes, train_i_values, n_values, n_roles, role_val, b
      [  48 1445   49 1440]
      [  48 1445   49 1442]]
     '''
+
+    # print("***********")
+    # print(train_i_indexes.shape)
+    # print(train_i_values.shape)
+    # print(batch_size)
+    # print(arity)
+    # print(n_roles)
+    # print(n_values)
 
     new_facts_indexes = np.empty((batch_size*2, 2*arity)).astype(np.int32) #matrix: batch_size*2, 2*arity
     new_facts_values = np.empty((batch_size*2, 1)).astype(np.float32) #matrix: batch_size*2, 1
@@ -137,6 +159,9 @@ def Batch_Loader(train_i_indexes, train_i_values, n_values, n_roles, role_val, b
     '''
 
     val_role = np.random.randint(np.iinfo(np.int32).max) % (n_values+n_roles)
+    # here we decide whether we replace roles or values to create negative examples
+    # this is not optimal as all negative facts in this batch will be created either by role permutation or value
+    # permutation but not both
     if val_role < n_values:  # 0~(n_values-1)
         replace_val(n_values, last_idx, role_val, arity, new_facts_indexes, new_facts_values, whole_train_facts, num_negative_samples)
     else:

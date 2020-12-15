@@ -18,16 +18,38 @@ from batching import *
 
 from multiprocessing import JoinableQueue, Queue, Process
 
+
 def chunks(L, n):
     """ Yield successive n-sized chunks from L."""
     for i in range(0, len(L), n):
         yield L[i:i+n]
 
+
 def split_list(a, n):
     k, m = divmod(len(a), n)
     return (a[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n))
 
+
 def evaluate_replicated_fact_with_correct_element_and_index_pre_stored_on_multiple_gpus (model, epoch, n_roles, n_values, whole_train, whole_test, whole_valid, list_of_testing_facts, device, output_queue, list_of_roles_h_ids, list_of_roles_t_ids, n_roles_h):
+    """
+    This function evaluates the model on a gpu.
+
+    :param model:
+    :param epoch:
+    :param n_roles:
+    :param n_values:
+    :param whole_train:
+    :param whole_test:
+    :param whole_valid:
+    :param list_of_testing_facts: a list of facts that will be tested, truth values of these facts are unknown
+    :param device:
+    :param output_queue:
+    :param list_of_roles_h_ids: list of indices for roles that are triple heads
+    :param list_of_roles_t_ids: list of indices for roles that are triple tails
+    :param n_roles_h:
+    :return:
+    """
+
     with torch.no_grad():
         print("evaluate_replicated_fact_with_correct_element_and_index_pre_stored_on_multiple_gpus on device", device)
         model.to(device)
@@ -35,6 +57,16 @@ def evaluate_replicated_fact_with_correct_element_and_index_pre_stored_on_multip
 
         range_of_roles = np.arange(n_roles)
         range_of_values = np.arange(n_values)
+
+        # The following explains different evaluation tasks
+        # if task == "head_value_facts" or task == "tail_value_facts": # table 2 head/tail prediction
+        # if task == "head_key_facts" or task == "tail_key_facts":  # table 2 relation prediction
+        # if task == "binary_head_value_facts" or task == "binary_tail_value_facts":  # table 4 triple fact head/tail prediction
+        # if task == "binary_head_key_facts":  # table 4 triple fact relation prediction
+        # if task == "nary_head_value_facts" or task == "nary_tail_value_facts":  # table 4 hyper relational fact head/tail prediction
+        # if task == "nary_head_key_facts":  # table 4 hyper relational fact relation prediction
+        # if task == "values_without_hrt":  # table 5 value prediction
+        # if task == "keys_without_hrt":  # table 5 key prediction
 
         binary_hit1_roles = 0
         nary_hit1_roles = 0
@@ -142,23 +174,26 @@ def evaluate_replicated_fact_with_correct_element_and_index_pre_stored_on_multip
         values_without_hrt_hit1 = 0 #without hrt
         number_values_without_hrt = 0 #without hrt
 
-
+        # iterate through each testing fact
         for fact_progress, fact in enumerate(list_of_testing_facts):
 
             fact = list(fact)
             arity = int(len(fact)/2)
 
-            # print("PROGRESS:", fact_progress, "/", len(list_of_testing_facts), "[arity:", arity, "] on GPU", device)
+            print("PROGRESS:", fact_progress, "/", len(list_of_testing_facts), "[arity:", arity, "] on GPU", device)
             # sys.stdout.flush()
 
-            #parse the fact by column and tile it
-            for column in range (len(fact)):
+            # Important: for each testing fact, exhaustively perturb its roles and values one at a time
+            # parse the fact by column and tile it
+            for column in range(len(fact)):
 
                 correct_index = fact[column]
 
-                if column % 2 == 0: #roles
-                    #our tiled technique based on our negative sampling
+                # tiled_fact has shape [number of perturbed facts, the length of the fact]
+                # perturbing a role
+                if column % 2 == 0:
 
+                    #our tiled technique based on our negative sampling
                     if column==0 or column==2: #in column 0 we put PX_h and in column 2 we put PX_t
                         tiled_fact = np.array(fact*n_roles_h).reshape(n_roles_h,-1)
                         tiled_fact[:,0] = list_of_roles_h_ids
@@ -167,9 +202,10 @@ def evaluate_replicated_fact_with_correct_element_and_index_pre_stored_on_multip
                         tiled_fact = np.array(fact*n_roles).reshape(n_roles,-1)
                         tiled_fact[:,column] = range_of_roles
 
-
-                    if arity == 2: number_of_binary_facts_roles = number_of_binary_facts_roles + 1
-                    else: number_of_nary_facts_roles = number_of_nary_facts_roles + 1
+                    if arity == 2:
+                        number_of_binary_facts_roles = number_of_binary_facts_roles + 1
+                    else:
+                        number_of_nary_facts_roles = number_of_nary_facts_roles + 1
 
                     if arity==2 and column==0: #binary head
                         number_of_binary_head_key_facts += 1
@@ -182,12 +218,16 @@ def evaluate_replicated_fact_with_correct_element_and_index_pre_stored_on_multip
 
                     if column > 3:
                         number_keys_without_hrt += 1 #without hrt
+                    print("Test a role", tiled_fact.shape)
 
-                else: #values
+                # perturbing a value
+                else:
                     tiled_fact = np.array(fact*n_values).reshape(n_values,-1)
                     tiled_fact[:,column] = range_of_values
-                    if arity == 2: number_of_binary_facts_values = number_of_binary_facts_values + 1
-                    else: number_of_nary_facts_values = number_of_nary_facts_values + 1
+                    if arity == 2:
+                        number_of_binary_facts_values = number_of_binary_facts_values + 1
+                    else:
+                        number_of_nary_facts_values = number_of_nary_facts_values + 1
 
                     if arity==2 and column == 1: #binary head value
                         number_of_binary_head_value_facts += 1
@@ -201,6 +241,7 @@ def evaluate_replicated_fact_with_correct_element_and_index_pre_stored_on_multip
                     if column > 3:
                         number_values_without_hrt += 1 #without hrt
 
+                    print("Test a value", tiled_fact.shape)
 
                 if column == 1:
                     number_of_head_value_facts += 1
@@ -211,22 +252,24 @@ def evaluate_replicated_fact_with_correct_element_and_index_pre_stored_on_multip
                 elif column == 2:
                     number_of_tail_key_facts += 1
 
-
+                # run the model
                 tiled_fact = list(chunks(tiled_fact, 128))
                 pred = model(tiled_fact[0], arity, "testing", device) #get the first batch
                 for batch_it in range(1, len(tiled_fact)): #get all the other batches
                     pred_tmp = model(tiled_fact[batch_it], arity, "testing", device)
                     pred = torch.cat((pred, pred_tmp))
 
+                # sort predictions
+                # because perturbed facts are ordered by role or value dictionary indices. The list index of sorted_pred
+                # is the role or value index.
                 sorted_pred = torch.argsort(pred, dim=0, descending=True)
-
 
                 if column==0:
                     sorted_pred = np.asarray(list_of_roles_h_ids)[sorted_pred.cpu().numpy()]
-
                 elif column==2:
                     sorted_pred = np.asarray(list_of_roles_t_ids)[sorted_pred.cpu().numpy()]
 
+                # find out the rank of the correct testing fact after filtering
                 position_of_correct_fact_in_sorted_pred = 0
                 for tmpxx in sorted_pred:
                     if tmpxx == correct_index:
@@ -234,6 +277,8 @@ def evaluate_replicated_fact_with_correct_element_and_index_pre_stored_on_multip
                     tmp_list = deepcopy(fact)
                     tmp_list[column] = tmpxx.item()
                     tmpTriple = tuple(tmp_list)
+
+                    # filter perturbed facts that are in train, valid, or test
                     if (len(whole_train) > arity-2) and (tmpTriple in whole_train[arity-2]): # 2-ary in index 0
                         continue
                     elif (len(whole_valid) > arity-2) and (tmpTriple in whole_valid[arity-2]): # 2-ary in index 0
@@ -242,6 +287,10 @@ def evaluate_replicated_fact_with_correct_element_and_index_pre_stored_on_multip
                         continue
                     else:
                         position_of_correct_fact_in_sorted_pred += 1
+
+                # Important: xxx_without_hrt_yyy are only set if column is larger than 3.
+                #            this means that scores for role-value predictions do not include evaluation on triple head
+                #            and tail roles and values
 
                 if position_of_correct_fact_in_sorted_pred == 0:
                     if column % 2 == 0: #roles
@@ -411,6 +460,8 @@ def evaluate_replicated_fact_with_correct_element_and_index_pre_stored_on_multip
                     else:
                         nary_tail_key_mrr = nary_tail_key_mrr + float(1/(position_of_correct_fact_in_sorted_pred+1))
 
+    print("*******************")
+    print(keys_without_hrt_mrr)
 
     output_message = {}
 
@@ -581,9 +632,32 @@ def evaluate_replicated_fact_with_correct_element_and_index_pre_stored_on_multip
 
     return output_queue
 
-def prepare_data_for_evaluation_and_evaluate_on_multiple_gpus (model, test, epoch, n_roles, n_values, whole_train, whole_test, whole_valid, gpu_ids_splitted, output_queue, list_of_roles_h_ids, list_of_roles_t_ids, n_roles_h):
+
+def prepare_data_for_evaluation_and_evaluate_on_multiple_gpus(model, test, epoch, n_roles, n_values, whole_train, whole_test, whole_valid, gpu_ids_splitted, output_queue, list_of_roles_h_ids, list_of_roles_t_ids, n_roles_h):
+    """
+    This function distributes evaluation to multiple gpus
+
+    :param model:
+    :param test: original test data. A list of dictionaries, where each dictionary stores facts with the same arity.
+                 Dictionary key is the fact, and dictionary value is the truth value of the fact.
+    :param epoch:
+    :param n_roles:
+    :param n_values:
+    :param whole_train:
+    :param whole_test:
+    :param whole_valid:
+    :param gpu_ids_splitted:
+    :param output_queue:
+    :param list_of_roles_h_ids:
+    :param list_of_roles_t_ids:
+    :param n_roles_h:
+    :return:
+    """
+
     print("prepare_data_for_evaluation_and_evaluate_on_multiple_gpus")
     ### START OF PARALLELIZATION ###
+
+    # put all test facts with different arities into one list for evaluation
     list_of_all_test_facts = []
     for test_fact_grouped_by_arity in test:
         for test_fact in test_fact_grouped_by_arity:
@@ -592,6 +666,7 @@ def prepare_data_for_evaluation_and_evaluate_on_multiple_gpus (model, test, epoc
 
     jobs = []
 
+    # distribute evaluation to several gpus
     for slice_it, slice in enumerate(slices):
         device = "cuda:" + str(gpu_ids_splitted[slice_it])
         current_job = mp.Process(target=evaluate_replicated_fact_with_correct_element_and_index_pre_stored_on_multiple_gpus, args=(model, epoch, n_roles, n_values, whole_train, whole_test, whole_valid, slices[slice_it], device, output_queue, list_of_roles_h_ids, list_of_roles_t_ids, n_roles_h))
@@ -623,12 +698,16 @@ def prepare_data_for_evaluation_and_evaluate_on_multiple_gpus (model, test, epoc
                 weighted_scores[task][3] = weighted_scores[task][3] + dictionary[task][4] #hits@3
                 weighted_scores[task][4] = weighted_scores[task][4] + dictionary[task][5] #hits@1
 
+    # standard triple link prediction, all facts
     overall_entity_prediction = {'mrr':0, 'hits10':0, 'hits1':0}
     overall_relation_prediction = {'mrr':0, 'hits10':0, 'hits1':0}
+    # standard triple link prediction, facts with arity=2
     triple_entity_prediction = {'mrr':0, 'hits10':0, 'hits1':0}
     triple_relation_prediction = {'mrr':0, 'hits10':0, 'hits1':0}
+    # standard triple link prediction, facts with arity>2
     hyperrelational_entity_prediction = {'mrr':0, 'hits10':0, 'hits1':0}
     hyperrelational_relation_prediction = {'mrr':0, 'hits10':0, 'hits1':0}
+    # key and value prediction
     hyperrelational_key_prediction = {'mrr':0, 'hits10':0, 'hits1':0}
     hyperrelational_value_prediction = {'mrr':0, 'hits10':0, 'hits1':0}
 
@@ -719,10 +798,9 @@ def prepare_data_for_evaluation_and_evaluate_on_multiple_gpus (model, test, epoc
 
     print("Table5 hyper-relational fact key prediction [mrr, hits@10, hits@1]:", "%.4f"%hyperrelational_key_prediction['mrr'], "%.4f"%hyperrelational_key_prediction['hits10'], "%.4f"%hyperrelational_key_prediction['hits1'])
 
-
-
     ### END OF PARALLELIZATION ###
     print("Evaluation is over.")
+
 
 def main():
 
@@ -738,6 +816,7 @@ def main():
     parser.add_argument('--outdir', type=str, help='Output dir of model')
     parser.add_argument('--load', default='False', help='If true, it loads a saved model in dir outdir and evaluate it (default: False)' )
     parser.add_argument('--gpu_ids', default='0,1,2,3', help='Comma-separated gpu id used to paralellize the evaluation (default: 0,1,2,3)' )
+    # new sampling is used by NaLP_FIX model
     parser.add_argument('--new_negative_sampling_h_and_t', default='False', help='If true, it executes the new negative sampling' )
     parser.add_argument('--num_negative_samples', type=int, default=1, help='number of negative samples for each positive sample' )
     args = parser.parse_args()
@@ -747,6 +826,8 @@ def main():
     print("************************\n\n")
 
     gpu_ids_splitted = list(map(int, args.gpu_ids.split(",")))
+
+    print("#############################################################3")
 
     if args.load == 'True':
         t2 = TicToc()
@@ -811,7 +892,7 @@ def main():
 
         t2.tic()
         output_queue = mp.Queue()
-        prepare_data_for_evaluation_and_evaluate_on_multiple_gpus (model, test, epoch, n_roles, n_values, whole_train, whole_test, whole_valid, gpu_ids_splitted, output_queue, list_of_roles_h_ids, list_of_roles_t_ids, n_roles_h)
+        prepare_data_for_evaluation_and_evaluate_on_multiple_gpus(model, test, epoch, n_roles, n_values, whole_train, whole_test, whole_valid, gpu_ids_splitted, output_queue, list_of_roles_h_ids, list_of_roles_t_ids, n_roles_h)
         t2.toc()
         print("Evaluation running time (seconds):", t2.elapsed)
 
@@ -845,10 +926,12 @@ def main():
         print("Unique number of roles:", n_roles)
         print("Unique number of values:", n_values)
 
+        # mapping from head entity roles to their ids
         roles_h_2id = {}
         roles_t_2id = {}
         id2roles_h = {}
         id2roles_t = {}
+        # mapping from head entity roles to tail entity roles
         roleH2roleT = {}
         if 'wikipeople' in args.indir.lower():
             print("\n********************************************************\ncreating extra dictionaries for wikipeople dataset\n********************************************************\n")
@@ -892,8 +975,8 @@ def main():
             r_t_id = roles_t_2id[r_t_string]
             list_of_roles_t_ids.append(r_t_id)
 
-
         # Load the whole dataset for negative sampling in "batching.py"
+        # these data are augmented by permutation: the order of role-value pair in each fact are exhaustively arranged
         with open(args.indir + "/dictionaries_and_facts_permutate.bin", 'rb') as fin:
             data_info1 = pickle.load(fin)
         whole_train = data_info1["train_facts"]
@@ -941,13 +1024,18 @@ def main():
             model.to(gpu_ids_splitted[0])
             train_loss = 0
 
+            # iterating through training facts with different arities
             for i in range(len(train)): #batch_number == i
                 train_i_indexes = np.array(list(train[i].keys())).astype(np.int32)
                 train_i_values = np.array(list(train[i].values())).astype(np.float32)
 
+                # iterating through training facts with i arities
                 for batch_num in range(n_batches_per_epoch[i]):
 
                     arity = i + 2  # 2-ary in index 0
+
+                    # batch loader sample batch size number of facts from facts with the current i arities
+                    # this setup is not normal as not all facts are used exactly once in one iteration
                     x_batch, y_batch = Batch_Loader(train_i_indexes, train_i_values, n_values, n_roles, role_val, args.batchsize, arity, whole_train[i], id2value, id2role, args.new_negative_sampling_h_and_t, roleH2roleT, args.num_negative_samples)
                     pred = model(x_batch, arity, "training", gpu_ids_splitted[0])
                     pred = pred * torch.FloatTensor(y_batch).cuda(gpu_ids_splitted[0]) * (-1)
@@ -976,7 +1064,7 @@ def main():
 
         t2.tic()
         output_queue = mp.Queue()
-        prepare_data_for_evaluation_and_evaluate_on_multiple_gpus (model, test, epoch, n_roles, n_values, whole_train, whole_test, whole_valid, gpu_ids_splitted, output_queue, list_of_roles_h_ids, list_of_roles_t_ids, n_roles_h)
+        prepare_data_for_evaluation_and_evaluate_on_multiple_gpus(model, test, epoch, n_roles, n_values, whole_train, whole_test, whole_valid, gpu_ids_splitted, output_queue, list_of_roles_h_ids, list_of_roles_t_ids, n_roles_h)
         t2.toc()
         print("Evaluation last epoch ", epoch, "- running time (seconds):", t2.elapsed)
 
@@ -987,4 +1075,5 @@ def main():
 
 
 if __name__ == '__main__':
+    print("Here")
     main()

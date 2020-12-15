@@ -8,8 +8,6 @@ tf.compat.v1.flags.DEFINE_string("data_dir", "./data", "The data dir.")
 tf.compat.v1.flags.DEFINE_string("bin_postfix", "", "The new_postfix for the output bin file.")
 tf.compat.v1.flags.DEFINE_boolean("if_permutate", False, "If permutate for test filter.")
 
-
-
 FLAGS = tf.compat.v1.flags.FLAGS
 import sys
 FLAGS(sys.argv)
@@ -17,11 +15,18 @@ FLAGS(sys.argv)
 print("\nParameters:")
 for attr, value in sorted(FLAGS.__flags.items()):
 #for attr, value in sorted(FLAGS.flag_values_dict().items()):
-    print("{}={}".format(attr.upper(), value))
+    print("{}={}".format(attr.upper(), value.value))
+
 
 def permutations(arr, position, end, res):
     """
     Permutate the array
+
+    e.g., permutations(list(range(3)), 0, 3, [])
+          returns [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 1, 0), (2, 0, 1)]
+
+    e.g., permutations(list(range(3)), 1, 3, [])
+          returns [(0, 1, 2), (0, 2, 1)]
     """
     if position == end:
         res.append(tuple(arr))
@@ -32,9 +37,10 @@ def permutations(arr, position, end, res):
             arr[index], arr[position] = arr[position], arr[index]
     return res
 
+
 def load_data_from_txt(filenames, values_indexes = None, roles_indexes = None, ary_permutation = None):
     """
-    Take a list of file names and build the corresponding dictionnary of facts
+    Take a list of file names and build the corresponding dictionary of facts
     """
     if values_indexes is None:
         values_indexes= dict()
@@ -53,6 +59,8 @@ def load_data_from_txt(filenames, values_indexes = None, roles_indexes = None, a
         next_role = max(roles_indexes.values()) + 1
     if ary_permutation is None:
         ary_permutation= dict()
+
+    # Important: N is the number of role-value pairs in a fact
 
     max_n = 2  # The maximum arity of the facts
     for filename in filenames:
@@ -124,9 +132,10 @@ def load_data_from_txt(filenames, values_indexes = None, roles_indexes = None, a
 
     return data, values_indexes, roles_indexes, ary_permutation
 
+
 def get_neg_candidate_set(folder, values_indexes, roles_indexes):
     """
-    Get negative candidate set for replacing value
+    This function returns a dictionary from each role to its candidate values
     """
     role_val = {}
     with open(folder + 'n-ary_train.json') as f:
@@ -151,15 +160,30 @@ def get_neg_candidate_set(folder, values_indexes, roles_indexes):
                         role_val[k_ind].append(val_ind)
     return role_val
 
+
 def build_data(folder='data/'):
     """
     Build data and save to files
+
+    train_facts: a list of dictionaries. The list index +2 is the number of role-value pairs for facts in that
+                 dictionary. Each fact is represented as a dictionary item. The dictionary key is a tuple of the format
+                 (role 1 idx, value 1 idx, role 2 idx, value 2 idx, ... role N idx, value N idx). The dictionary value
+                 is the truth value of the fact (0 or 1)
+
+                 if permutation is set to true when creating the data, each fact will be permutated by exhaustively
+                 changing the order of roles (and corresponding values) in the dictionary key list.
+
+    values_indexes: a dictionary mapping from value to index
     """
     train_facts, values_indexes, roles_indexes, ary_permutation = load_data_from_txt([folder + 'n-ary_train.json'])
     valid_facts, values_indexes, roles_indexes, ary_permutation = load_data_from_txt([folder + 'n-ary_valid.json'],
-            values_indexes = values_indexes , roles_indexes = roles_indexes, ary_permutation = ary_permutation)
+                                                                                     values_indexes=values_indexes,
+                                                                                     roles_indexes=roles_indexes,
+                                                                                     ary_permutation=ary_permutation)
     test_facts, values_indexes, roles_indexes, ary_permutation = load_data_from_txt([folder + 'n-ary_test.json'],
-            values_indexes = values_indexes , roles_indexes = roles_indexes, ary_permutation = ary_permutation)
+                                                                                    values_indexes=values_indexes,
+                                                                                    roles_indexes=roles_indexes,
+                                                                                    ary_permutation=ary_permutation)
     data_info = {}
     data_info["train_facts"] = train_facts
     data_info["valid_facts"] = valid_facts
@@ -171,6 +195,7 @@ def build_data(folder='data/'):
         data_info['role_val'] = role_val
     with open(folder + "/dictionaries_and_facts" + FLAGS.bin_postfix + ".bin", 'wb') as f:
         pickle.dump(data_info, f)
+
 
 if __name__ == '__main__':
     print(time.strftime(ISOTIMEFORMAT, time.localtime()))
